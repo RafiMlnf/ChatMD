@@ -2,21 +2,22 @@
 
 Aplikasi pesan instan privat berbasis LAN dengan sistem token discovery. Tanpa database, tanpa log file, dan riwayat pesan hanya tersimpan di RAM.
 
-## Persyaratan
+## Unduh & Persyaratan
 
-* Server: Node.js (hanya untuk host server)
-* Client: Windows OS (Python 3.x otomatis diinstall jika belum ada)
+* **Client**: Windows OS (tinggal jalankan `ChatMD.exe`, tanpa perlu Python).
+  * 📥 **[Download ChatMD.exe Terbaru di GitHub Releases](https://github.com/RafiMlnf/ChatMD/releases)**
+* **Server**: Node.js (hanya di PC host server).
 
 ## Cara Penggunaan
 
 ### 1. Jalankan Server (Hanya di 1 PC)
-* Buka folder `server`
-* Jalankan `start-server.bat`
-* Catat 5 karakter TOKEN yang muncul di layar.
+* Masuk ke folder `server`.
+* Jalankan `start-server.bat`.
+* Catat 5 karakter **TOKEN** yang muncul di layar.
 
 ### 2. Jalankan Client (Di PC lain)
-* Jalankan `ChatMD.bat`
-* Masukkan TOKEN server.
+* Jalankan `ChatMD.exe`.
+* Masukkan **TOKEN** server.
 * Pilih kontak dari daftar untuk mulai mengobrol.
 
 ## Fitur & Keamanan
