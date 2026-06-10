@@ -33,10 +33,12 @@ except ImportError as e:
 
 
 # ─── Konstanta ─────────────────────────────────────────────────────────────────
-CHATMD_PORT    = int(os.environ.get("CHATMD_PORT", os.environ.get("VINC_PORT", "8765")))
-RECONNECT_DELAY = 3          # detik sebelum reconnect otomatis
-PING_INTERVAL  = 20          # detik antar ping keepalive
-VERSION        = "1.2.0"
+CHATMD_PORT      = int(os.environ.get("CHATMD_PORT", os.environ.get("VINC_PORT", "8765")))
+DISCOVERY_PORT   = int(os.environ.get("CHATMD_DISC_PORT", "8766"))
+DISCOVERY_TIMEOUT = 12       # detik tunggu UDP broadcast
+RECONNECT_DELAY  = 3         # detik sebelum reconnect otomatis
+PING_INTERVAL    = 20        # detik antar ping keepalive
+VERSION          = "1.3.0"
 
 
 # ─── State Global ──────────────────────────────────────────────────────────────
@@ -59,6 +61,10 @@ g_current_ui = None
 
 # Flag shutdown
 g_shutdown = threading.Event()
+
+# Flag status registrasi
+g_registered = threading.Event()
+g_registration_error: Optional[str] = None
 
 # Flag redraw untuk menu utama (daftar kontak)
 g_menu_needs_redraw = False
@@ -105,9 +111,15 @@ def get_identity() -> str:
         host = "PC"
 
     if win_user:
-        return f"{win_user}@{host}"
+        raw_name = f"{win_user}@{host}"
     else:
-        return host
+        raw_name = host
+
+    # Bersihkan username: ganti spasi dengan underscore, buang karakter ilegal
+    # Server hanya menerima: alfanumerik, _, -, ., dan @
+    raw_name = raw_name.replace(" ", "_")
+    cleaned = "".join(c for c in raw_name if c.isalnum() or c in "_-.@")
+    return cleaned[:32]
 
 
 # ─── Class UI Chat Inline CMD ──────────────────────────────────────────────────
@@ -139,7 +151,7 @@ class TerminalChatUI:
             sys.stdout.write("\r" + " " * (current_input_len + 4) + "\r")
             
             # 2. Cetak pesan baru
-            sys.stdout.write(f"  {sender:<20} : {text}\n")
+            sys.stdout.write(f"  {sender:<32} : {text}\n")
             
             # 3. Kembalikan prompt dan apa yang sedang diketik user (jika sedang di input)
             if self.in_get_input:
@@ -220,12 +232,19 @@ def on_ws_message(ws, raw_msg: str):
 
     elif msg_type == "registered":
         print_status(f"Terdaftar sebagai: {data.get('username', g_username)}")
+        g_registered.set()
 
     elif msg_type == "sent":
         pass
 
     elif msg_type == "error":
         err = data.get("message", "Unknown error")
+        # Jika belum terdaftar, ini kemungkinan error registrasi (misal nama duplikat)
+        if not g_registered.is_set():
+            global g_registration_error
+            g_registration_error = err
+            g_shutdown.set()
+        
         # Cetak error jika tidak sedang berada dalam sesi chat aktif
         with g_sessions_lock:
             if g_active_partner is None:
@@ -483,7 +502,7 @@ def run_chat_session(partner: str):
     # Cetak seluruh history yang ada terlebih dahulu
     with g_sessions_lock:
         for msg in g_chat_histories[partner]:
-            sys.stdout.write(f"  {msg['sender']:<20} : {msg['text']}\n")
+            sys.stdout.write(f"  {msg['sender']:<32} : {msg['text']}\n")
         sys.stdout.flush()
 
     try:
@@ -538,6 +557,70 @@ def run_chat_session(partner: str):
             g_current_ui = None
 
 
+# ─── Token Discovery ──────────────────────────────────────────────────
+
+def discover_server(token: str):
+    """
+    Temukan server ChatMD menggunakan sistem query-response aktif via UDP.
+    Client mengirim query ke broadcast, server membalas langsung ke client.
+    Client tidak perlu bind ke port khusus — pakai port ephemeral (random).
+    Return (ip, port) jika ditemukan, None jika timeout.
+    """
+    token = token.strip().upper()
+
+    # Pakai port ephemeral (0) — OS yang pilih, tidak ada konflik port
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    sock.settimeout(0.8)
+    sock.bind(("", 0))  # port acak — tidak perlu 8766
+
+    query = json.dumps({"type": "discover", "token": token}).encode("utf-8")
+
+    deadline  = time.time() + DISCOVERY_TIMEOUT
+    found_ip  = None
+    found_port = CHATMD_PORT
+    spinner   = ["|", "/", "-", "\\"]
+    spin_i    = 0
+
+    try:
+        while time.time() < deadline:
+            remaining = int(deadline - time.time())
+            sys.stdout.write(
+                f"\r  Mencari server [{token}] {spinner[spin_i % 4]} ({remaining}s)  "
+            )
+            sys.stdout.flush()
+            spin_i += 1
+
+            # Kirim query aktif ke broadcast — server akan balas langsung
+            try:
+                sock.sendto(query, ("255.255.255.255", DISCOVERY_PORT))
+            except OSError:
+                pass
+
+            # Tunggu balasan dari server
+            try:
+                data, addr = sock.recvfrom(512)
+                msg = json.loads(data.decode("utf-8"))
+                if msg.get("token", "").upper() == token:
+                    found_ip   = msg.get("ip") or addr[0]
+                    found_port = int(msg.get("port", CHATMD_PORT))
+                    break
+            except (socket.timeout, json.JSONDecodeError, OSError):
+                pass
+    finally:
+        sock.close()
+
+    if found_ip:
+        sys.stdout.write(f"\r  Server ditemukan: {found_ip}:{found_port}               \n")
+        sys.stdout.flush()
+        return found_ip, found_port
+    else:
+        sys.stdout.write(f"\r  [!] Token [{token}] tidak ditemukan. Coba lagi.          \n")
+        sys.stdout.flush()
+        return None
+
+
 # ─── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
@@ -555,18 +638,33 @@ def main():
         print_info(f"Identitas terdeteksi: {g_username}")
     print()
 
-    # 2. Minta IP server
-    try:
-        # Menggunakan ANSI escape code \033[90m untuk warna abu-abu/pudar, dan \033[0m untuk reset
-        raw_ip = input("  Masukkan IP Server ChatMD \033[90m(Enter = 127.0.0.1)\033[0m: ").strip()
-    except (EOFError, KeyboardInterrupt):
-        print("\n  Keluar.")
-        sys.exit(0)
+    # 2. Minta token dan lakukan discovery
+    while True:
+        try:
+            raw_token = input(
+                "  Masukkan TOKEN server ChatMD \033[90m(5 karakter dari host)\033[0m: "
+            ).strip().upper()
+        except (EOFError, KeyboardInterrupt):
+            print("\n  Keluar.")
+            sys.exit(0)
 
-    if not raw_ip:
-        raw_ip = "127.0.0.1"
-    g_server_ip = raw_ip
-    server_url = f"ws://{g_server_ip}:{CHATMD_PORT}"
+        if not raw_token:
+            print_error("Token tidak boleh kosong.")
+            continue
+        if len(raw_token) != 5 or not raw_token.isalnum():
+            print_error("Token harus tepat 5 karakter huruf/angka.")
+            continue
+
+        print()
+        result = discover_server(raw_token)
+        if result is None:
+            print()
+            continue  # kembali minta token
+        break
+
+    found_ip, found_port = result
+    g_server_ip = found_ip
+    server_url  = f"ws://{found_ip}:{found_port}"
 
     print()
     print_status(f"Menghubungkan ke {server_url} ...")
@@ -580,8 +678,18 @@ def main():
         print_error("Gagal terhubung ke server. Pastikan server aktif dan IP benar.")
         sys.exit(1)
 
-    print_status("Terhubung")
-    time.sleep(1.0)  # Beri waktu server kirim user_list awal
+    print_status("Terhubung, mendaftarkan sesi...")
+    
+    # Tunggu registrasi berhasil (maks 3 detik)
+    if not g_registered.wait(timeout=3.0):
+        if g_registration_error:
+            print_error(f"Pendaftaran ditolak oleh server: {g_registration_error}")
+        else:
+            print_error("Gagal terdaftar ke server (Timeout).")
+        sys.exit(1)
+
+    print_status("Sesi terdaftar dengan sukses.")
+    time.sleep(0.5)
 
     # 4. Loop menu utama
     try:

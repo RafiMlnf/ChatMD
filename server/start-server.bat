@@ -1,8 +1,7 @@
 @echo off
 title ChatMD Server
 echo.
-echo  ChatMD - Volatile Intranet Chat
-echo  WebSocket Server
+echo  ChatMD - WebSocket Server
 echo.
 
 :: Cek apakah Node.js terinstall

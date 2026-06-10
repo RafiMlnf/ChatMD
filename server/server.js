@@ -1,22 +1,55 @@
 /**
- * ChatMD — Volatile Intranet Chat
- * WebSocket Server (Node.js + ws)
+ * ChatMD - WebSocket Server (Node.js + ws)
  *
  * Arsitektur:
  *  - Semua data user disimpan di Map in-memory (volatile)
  *  - Rate limiting: sliding window 3 msg/3 detik per socket
  *  - Tidak ada file I/O, tidak ada database
  *  - Otomatis membersihkan user saat disconnect
+ *  - Token-based discovery via UDP broadcast (port 8766)
  */
 
 "use strict";
 
 const { WebSocketServer, WebSocket } = require("ws");
+const dgram = require("dgram");
+const os   = require("os");
 
 // ─── Konfigurasi ────────────────────────────────────────────────
-const PORT = process.env.CHATMD_PORT || process.env.VINC_PORT || 8765;
-const RATE_LIMIT_MAX = 3;     // maksimal N pesan...
-const RATE_LIMIT_WINDOW = 3000; // ...dalam X milidetik (sliding window)
+const PORT            = parseInt(process.env.CHATMD_PORT || process.env.VINC_PORT || "8765", 10);
+const DISCOVERY_PORT  = parseInt(process.env.CHATMD_DISC_PORT || "8766", 10);
+const BROADCAST_INTERVAL = 2000; // ms antar broadcast UDP
+const RATE_LIMIT_MAX    = 3;     // maksimal N pesan...
+const RATE_LIMIT_WINDOW = 3000;  // ...dalam X milidetik (sliding window)
+
+// ─── Token & IP ──────────────────────────────────────────────────
+
+/**
+ * Generate token 5 karakter: huruf kapital + angka.
+ * Menghindari karakter yang mirip (0/O, 1/I/L).
+ */
+function generateToken() {
+  const chars = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+  let t = "";
+  for (let i = 0; i < 5; i++) t += chars[Math.floor(Math.random() * chars.length)];
+  return t;
+}
+
+/**
+ * Ambil IP lokal pertama yang bukan loopback (IPv4).
+ */
+function getLocalIP() {
+  const ifaces = os.networkInterfaces();
+  for (const name of Object.keys(ifaces)) {
+    for (const iface of ifaces[name]) {
+      if (iface.family === "IPv4" && !iface.internal) return iface.address;
+    }
+  }
+  return "127.0.0.1";
+}
+
+const SESSION_TOKEN = generateToken();
+const LOCAL_IP      = getLocalIP();
 
 // ─── In-Memory Storage ──────────────────────────────────────────
 // Map<socketId, { username: string, socket: WebSocket, msgTimestamps: number[] }>
@@ -33,6 +66,8 @@ function broadcastUserList() {
     .filter((u) => u.username !== null)
     .map((u) => u.username);
   const payload = JSON.stringify({ type: "user_list", users: userList });
+
+  console.log(`[*] Broadcast daftar user aktif (${userList.length} user): [${userList.join(", ")}]`);
 
   for (const [, userData] of users) {
     if (userData.socket.readyState === WebSocket.OPEN) {
@@ -91,8 +126,9 @@ function findUserByName(username) {
 function handleRegister(socketId, userData, data) {
   const raw = (data.username || "").trim();
 
-  // Validasi username: alfanumerik + underscore + dash + titik + @ , 1–32 karakter
-  if (!/^[\w\-.@]{1,32}$/.test(raw)) {
+  // Validasi username: alfanumerik + spasi + underscore + dash + titik + @ , 1–32 karakter
+  if (!/^[\w\-.@ ]{1,32}$/.test(raw)) {
+    console.warn(`[!] REGISTER FAILED: Username "${raw}" invalid format (ip=${userData.ip})`);
     sendTo(userData.socket, {
       type: "error",
       message: "Username tidak valid. Gunakan huruf, angka, titik, atau dash.",
@@ -103,6 +139,7 @@ function handleRegister(socketId, userData, data) {
   // Cek duplikasi username
   const existing = findUserByName(raw);
   if (existing) {
+    console.warn(`[!] REGISTER FAILED: Username "${raw}" already in use (ip=${userData.ip})`);
     sendTo(userData.socket, {
       type: "error",
       message: `Username "${raw}" sudah digunakan. Tutup sesi lama terlebih dahulu.`,
@@ -189,14 +226,47 @@ function handlePing(userData) {
 
 const wss = new WebSocketServer({ port: PORT });
 
-console.log("╔══════════════════════════════════════════╗");
-console.log("║  ChatMD — Volatile Intranet Chat         ║");
-console.log("║  WebSocket Server                        ║");
-console.log(`║  Port: ${String(PORT).padEnd(35)}║`);
-console.log("╚══════════════════════════════════════════╝");
-console.log(`[*] Server aktif di ws://0.0.0.0:${PORT}`);
+console.log("--------------------------------------------");
+console.log(`  IP Address : ${LOCAL_IP}`);
+console.log(`  Port       : ${PORT}`);
+console.log(`  TOKEN      : ${SESSION_TOKEN}`);
+console.log("--------------------------------------------\n");
+console.log(`[*] Server aktif di ws://${LOCAL_IP}:${PORT}`);
+console.log(`[*] Discovery UDP broadcast di port ${DISCOVERY_PORT}`);
 console.log(`[*] Rate limit: ${RATE_LIMIT_MAX} pesan / ${RATE_LIMIT_WINDOW / 1000} detik`);
 console.log(`[*] Tekan Ctrl+C untuk shutdown\n`);
+
+// ─── UDP Discovery (Broadcast + Query-Response) ──────────────────
+// Server bind ke DISCOVERY_PORT agar bisa:
+//   1. Broadcast periodik (pasif — client dengerin)
+//   2. Balas query langsung dari client (aktif — lebih andal)
+const udpSock = dgram.createSocket("udp4");
+const discPayload = Buffer.from(
+  JSON.stringify({ token: SESSION_TOKEN, ip: LOCAL_IP, port: PORT })
+);
+
+udpSock.on("message", (data, rinfo) => {
+  // Balas query discovery dari client secara langsung
+  try {
+    const msg = JSON.parse(data.toString());
+    if (msg.type === "discover" && msg.token?.toUpperCase() === SESSION_TOKEN) {
+      udpSock.send(discPayload, 0, discPayload.length, rinfo.port, rinfo.address);
+    }
+  } catch (_) {}
+});
+
+udpSock.on("error", (err) => {
+  console.warn(`[!] UDP error: ${err.message}`);
+});
+
+udpSock.bind(DISCOVERY_PORT, () => {
+  udpSock.setBroadcast(true);
+  // Broadcast periodik sebagai fallback
+  setInterval(() => {
+    udpSock.send(discPayload, 0, discPayload.length, DISCOVERY_PORT, "255.255.255.255");
+  }, BROADCAST_INTERVAL);
+  console.log(`[*] UDP discovery aktif di port ${DISCOVERY_PORT} (token=${SESSION_TOKEN})\n`);
+});
 
 let hasHadClients = false;
 
@@ -289,6 +359,7 @@ function shutdown() {
     userData.socket.terminate();
   }
   users.clear();
+  udpSock.close();
   wss.close(() => {
     console.log("[*] Server berhenti. Sampai jumpa!");
     process.exit(0);
