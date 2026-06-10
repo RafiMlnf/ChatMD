@@ -1,4 +1,6 @@
-# Beritahu GitHub Linguist untuk mengabaikan file batch biner b64 & file generated agar statistik bahasa akurat
-ChatMD.bat linguist-generated
-client_files.zip linguist-generated
-*.bat linguist-documentation
+# Sembunyikan file batch biner b64 dan file helper agar statistik bahasa akurat
+ChatMD.bat linguist-detectable=false
+generate_bat.py linguist-detectable=false
+client/build.bat linguist-detectable=false
+server/start-server.bat linguist-detectable=false
+client_files.zip linguist-detectable=false
