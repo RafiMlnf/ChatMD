@@ -35,10 +35,12 @@ except ImportError as e:
 # ─── Konstanta ─────────────────────────────────────────────────────────────────
 CHATMD_PORT      = int(os.environ.get("CHATMD_PORT", os.environ.get("VINC_PORT", "8765")))
 DISCOVERY_PORT   = int(os.environ.get("CHATMD_DISC_PORT", "8766"))
+UPDATE_PORT      = CHATMD_PORT + 2  # HTTP server auto-update (default 8767)
 DISCOVERY_TIMEOUT = 12       # detik tunggu UDP broadcast
 RECONNECT_DELAY  = 3         # detik sebelum reconnect otomatis
 PING_INTERVAL    = 20        # detik antar ping keepalive
 VERSION          = "1.3.0"
+CHATMD_VERSION   = os.environ.get("CHATMD_VERSION", "")  # hash versi dari BAT
 
 
 # ─── State Global ──────────────────────────────────────────────────────────────
@@ -140,7 +142,7 @@ class TerminalChatUI:
 
     def start(self):
         clear()
-        print(f"  Kepada : {self.partner_name} --------------- [/b] Kembali ke menu\n")
+        print(f"  Kepada : {self.partner_name} --------------- [/b] Kembali | Drag & Drop untuk Kirim Gambar\n")
 
     def print_message(self, sender: str, text: str):
         with self.lock:
@@ -305,9 +307,50 @@ def _handle_user_list(users: list[str]):
             g_menu_needs_redraw = True
 
 
+def _process_image_payload(plaintext: str) -> str:
+    """
+    Decode payload [IMAGE:filename:base64] dan simpan ke Downloads/ChatMD_Received.
+    Otomatis buka dengan aplikasi default Windows.
+    Return string tampilan singkat.
+    """
+    try:
+        import base64 as _b64
+        # plaintext[7:-1] = "filename:base64data"
+        inner = plaintext[7:-1]
+        colon_idx = inner.index(":")
+        filename  = inner[:colon_idx]
+        b64_data  = inner[colon_idx + 1:]
+
+        img_data = _b64.b64decode(b64_data)
+
+        downloads_dir = os.path.join(os.path.expanduser("~"), "Downloads", "ChatMD_Received")
+        os.makedirs(downloads_dir, exist_ok=True)
+
+        base_name, ext = os.path.splitext(filename)
+        unique_name = filename
+        dest_path   = os.path.join(downloads_dir, unique_name)
+        counter = 1
+        while os.path.exists(dest_path):
+            unique_name = f"{base_name}_{counter}{ext}"
+            dest_path   = os.path.join(downloads_dir, unique_name)
+            counter += 1
+
+        with open(dest_path, "wb") as f:
+            f.write(img_data)
+
+        try:
+            os.startfile(dest_path)
+        except Exception:
+            pass
+
+        return f"[GAMBAR: {unique_name}] (Tersimpan di Downloads/ChatMD_Received)"
+    except Exception as e:
+        return f"[GAMBAR: Gagal memproses: {e}]"
+
+
 def _handle_incoming_message(data: dict):
     """Terima, decrypt, dan simpan ke riwayat chat."""
-    sender = data.get("from", "Unknown")
+    sender  = data.get("from", "Unknown")
     payload = data.get("payload", "")
 
     # Decrypt
@@ -322,12 +365,19 @@ def _handle_incoming_message(data: dict):
     with g_sessions_lock:
         if sender not in g_chat_histories:
             g_chat_histories[sender] = []
-        g_chat_histories[sender].append({"sender": sender, "text": plaintext})
 
-        # Jika sedang aktif chat dengan pengirim ini, print langsung ke UI
+        # Jika sedang aktif chat dengan pengirim ini
         if g_active_partner == sender and g_current_ui:
-            g_current_ui.print_message(sender, plaintext)
+            # Gambar: proses & tampilkan langsung
+            if plaintext.startswith("[IMAGE:") and plaintext.endswith("]"):
+                display_text = _process_image_payload(plaintext)
+            else:
+                display_text = plaintext
+            g_chat_histories[sender].append({"sender": sender, "text": display_text})
+            g_current_ui.print_message(sender, display_text)
         else:
+            # Simpan apa adanya; gambar akan diproses saat user buka chat
+            g_chat_histories[sender].append({"sender": sender, "text": plaintext})
             g_unread_messages[sender] = g_unread_messages.get(sender, 0) + 1
             # Jika user sedang di dalam chat room dengan orang lain:
             if g_active_partner is not None and g_current_ui:
@@ -499,11 +549,19 @@ def run_chat_session(partner: str):
     g_current_ui = ui
     ui.start()
 
-    # Cetak seluruh history yang ada terlebih dahulu
+    # Cetak seluruh history — gambar yang belum diproses akan di-download sekarang
     with g_sessions_lock:
-        for msg in g_chat_histories[partner]:
-            sys.stdout.write(f"  {msg['sender']:<32} : {msg['text']}\n")
-        sys.stdout.flush()
+        history_snapshot = list(g_chat_histories[partner])
+
+    for msg in history_snapshot:
+        text = msg["text"]
+        if text.startswith("[IMAGE:") and text.endswith("]"):
+            text = _process_image_payload(text)
+            # Update entry di history agar tidak di-download ulang
+            with g_sessions_lock:
+                msg["text"] = text
+        sys.stdout.write(f"  {msg['sender']:<32} : {text}\n")
+    sys.stdout.flush()
 
     try:
         while not g_shutdown.is_set() and ui.active:
@@ -527,9 +585,65 @@ def run_chat_session(partner: str):
                 ui.print_message("Sistem", "Tidak terhubung ke server. Pesan gagal terkirim.")
                 continue
 
+            # Cek apakah input adalah perintah kirim gambar atau drag-and-drop file langsung
+            is_image_cmd = False
+            img_path = None
+
+            # Deteksi drag & drop otomatis jika input berupa file path yang ada di lokal disk
+            path_check = text_strip.strip("'\"")
+            if os.path.exists(path_check) and os.path.isfile(path_check):
+                _, ext = os.path.splitext(path_check)
+                if ext.lower() in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"):
+                    is_image_cmd = True
+                    img_path = path_check
+                else:
+                    ui.print_message("Sistem", f"File terdeteksi, namun tipe '{ext}' bukan gambar (.png, .jpg, dll).")
+                    continue
+            elif text_strip.lower().startswith("/i "):
+                is_image_cmd = True
+                img_path = text_strip[3:].strip()
+            elif text_strip.lower().startswith("/img "):
+                is_image_cmd = True
+                img_path = text_strip[5:].strip()
+
+            if is_image_cmd:
+                if not img_path:
+                    ui.print_message("Sistem", "Gunakan: /i <path_gambar> atau /img <path_gambar>")
+                    continue
+
+                # Bersihkan tanda kutip dari Windows drag-and-drop
+                img_path = img_path.strip("'\"")
+
+                if not os.path.exists(img_path) or not os.path.isfile(img_path):
+                    ui.print_message("Sistem", f"File tidak ditemukan: {img_path}")
+                    continue
+
+                # Cek ukuran file (maks 10MB)
+                MAX_SIZE = 10 * 1024 * 1024
+                if os.path.getsize(img_path) > MAX_SIZE:
+                    ui.print_message("Sistem", "Ukuran gambar terlalu besar (maksimal 10MB).")
+                    continue
+
+                try:
+                    import base64
+                    ui.print_message("Sistem", "Membaca dan mengirim gambar...")
+                    with open(img_path, "rb") as f:
+                        file_bytes = f.read()
+                    b64_str = base64.b64encode(file_bytes).decode("utf-8")
+                    filename = os.path.basename(img_path)
+                    
+                    message_payload = f"[IMAGE:{filename}:{b64_str}]"
+                    display_text = f"[GAMBAR: {filename}] (Terkirim)"
+                except Exception as e:
+                    ui.print_message("Sistem", f"Gagal membaca gambar: {e}")
+                    continue
+            else:
+                message_payload = text_strip
+                display_text = text_strip
+
             # Enkripsi dan kirim pesan
             try:
-                encrypted = encrypt(text_strip)
+                encrypted = encrypt(message_payload)
                 payload = json.dumps({
                     "type": "message",
                     "to": partner,
@@ -542,10 +656,10 @@ def run_chat_session(partner: str):
 
             # Simpan ke riwayat pengirim
             with g_sessions_lock:
-                g_chat_histories[partner].append({"sender": g_username, "text": text_strip})
+                g_chat_histories[partner].append({"sender": g_username, "text": display_text})
 
             # Tampilkan pesan kita sendiri di CMD
-            ui.print_message(g_username, text_strip)
+            ui.print_message(g_username, display_text)
 
     except KeyboardInterrupt:
         g_shutdown.set()
@@ -620,6 +734,85 @@ def discover_server(token: str):
         sys.stdout.flush()
         return None
 
+# ─── Auto-Update ───────────────────────────────────────────────────────────────
+
+def check_for_update(server_ip: str) -> bool:
+    """
+    Bandingkan versi client saat ini dengan versi di server.
+    Jika ada versi lebih baru: unduh zip, ekstrak, re-launch dari folder baru.
+    Return True jika update berhasil dan proses saat ini harus berhenti.
+    Return False jika tidak ada update atau update gagal.
+    """
+    if not CHATMD_VERSION:
+        # Tidak bisa cek versi karena env var tidak di-set (dijalankan langsung dari .py)
+        return False
+
+    import urllib.request
+    import zipfile
+    import io
+    import subprocess
+
+    url_version = f"http://{server_ip}:{UPDATE_PORT}/version"
+    try:
+        with urllib.request.urlopen(url_version, timeout=3) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        remote_hash = data.get("hash", "")
+    except Exception:
+        # Server tidak menyediakan endpoint update — lanjut normal
+        return False
+
+    if not remote_hash or remote_hash == CHATMD_VERSION:
+        # Sudah versi terbaru
+        return False
+
+    # ── Ada versi baru ──
+    print()
+    print_status(f"Pembaruan tersedia! ({CHATMD_VERSION} → {remote_hash})")
+    print_status("Mengunduh...")
+
+    url_update = f"http://{server_ip}:{UPDATE_PORT}/update"
+    try:
+        with urllib.request.urlopen(url_update, timeout=60) as resp:
+            zip_data = resp.read()
+    except Exception as e:
+        print_status(f"Gagal mengunduh: {e}. Melanjutkan dengan versi lama.")
+        return False
+
+    # Ekstrak ke folder temp baru dengan hash terbaru
+    temp_base = os.environ.get("TEMP", os.environ.get("TMP", os.getcwd()))
+    new_dir = os.path.join(temp_base, f"ChatMD_{remote_hash}")
+    os.makedirs(new_dir, exist_ok=True)
+
+    try:
+        with zipfile.ZipFile(io.BytesIO(zip_data)) as zf:
+            zf.extractall(new_dir)
+    except Exception as e:
+        print_status(f"Gagal mengekstrak: {e}. Melanjutkan dengan versi lama.")
+        return False
+
+    new_script = os.path.join(new_dir, "chatmd_client.py")
+    if not os.path.exists(new_script):
+        print_status("Ekstrak berhasil tapi chatmd_client.py tidak ditemukan. Lanjut versi lama.")
+        return False
+
+    print_status("Update selesai! Meluncurkan versi baru...")
+    time.sleep(0.8)
+
+    # Re-launch di folder baru; pass argumen yang sama (username override jika ada)
+    env = os.environ.copy()
+    env["CHATMD_VERSION"] = remote_hash
+    try:
+        subprocess.Popen(
+            [sys.executable, new_script] + sys.argv[1:],
+            cwd=new_dir,
+            env=env,
+        )
+    except Exception as e:
+        print_status(f"Gagal meluncurkan versi baru: {e}")
+        return False
+
+    return True  # sinyal ke main() untuk exit
+
 
 # ─── Main ──────────────────────────────────────────────────────────────────────
 
@@ -665,6 +858,10 @@ def main():
     found_ip, found_port = result
     g_server_ip = found_ip
     server_url  = f"ws://{found_ip}:{found_port}"
+
+    # 3. Cek auto-update sebelum connect (hanya jika dijalankan dari BAT)
+    if check_for_update(found_ip):
+        sys.exit(0)
 
     print()
     print_status(f"Menghubungkan ke {server_url} ...")

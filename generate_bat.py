@@ -154,6 +154,7 @@ goto :menu
 :run_client
 cls
 cd /d "%EXTRACT_DIR%"
+set CHATMD_VERSION={EXTRACT_HASH}
 !PYTHON_CMD! chatmd_client.py
 if %errorlevel% neq 0 (
     echo.
@@ -166,6 +167,7 @@ goto :menu
 :run_bot
 cls
 cd /d "%EXTRACT_DIR%"
+set CHATMD_VERSION={EXTRACT_HASH}
 !PYTHON_CMD! chatmd_client.py Bot_Testing
 if %errorlevel% neq 0 (
     echo.
@@ -201,13 +203,16 @@ def bytes_to_base64_lines(data: bytes, width: int = 76) -> str:
     return "\n".join(lines)
 
 
+SERVER_DIR = os.path.join(os.path.dirname(__file__), "server")
+
+
 def generate():
     print("=" * 60)
     print("  ChatMD BAT Generator")
     print("=" * 60)
 
     # 1. Buat zip
-    print("\n[1/3] Membuat ZIP dari file client...")
+    print("\n[1/4] Membuat ZIP dari file client...")
     zip_bytes = build_zip_bytes()
     print(f"  -> Total ZIP: {len(zip_bytes):,} bytes")
 
@@ -216,12 +221,12 @@ def generate():
     print(f"  -> Hash versi: {extract_hash}")
 
     # 3. Encode ke base64
-    print("\n[2/3] Mengenkode ke Base64...")
+    print("\n[2/4] Mengenkode ke Base64...")
     b64_data = bytes_to_base64_lines(zip_bytes)
     print(f"  -> Total Base64: {len(b64_data):,} chars")
 
     # 4. Gabungkan template + data + tulis
-    print(f"\n[3/3] Menulis {os.path.basename(OUTPUT_BAT)}...")
+    print(f"\n[3/4] Menulis {os.path.basename(OUTPUT_BAT)}...")
 
     # Sisipkan hash ke template
     bat_body = BAT_TEMPLATE.replace("{EXTRACT_HASH}", extract_hash)
@@ -241,11 +246,57 @@ def generate():
 
     final_size = os.path.getsize(OUTPUT_BAT)
     print(f"  -> Selesai! {os.path.basename(OUTPUT_BAT)} ({final_size:,} bytes)")
+
+    # 5. Simpan ZIP + version.json ke folder server (untuk fitur auto-update)
+    print(f"\n[4/4] Menyalin artefak update ke folder server...")
+    if os.path.isdir(SERVER_DIR):
+        server_zip_path = os.path.join(SERVER_DIR, "client_files.zip")
+        server_ver_path = os.path.join(SERVER_DIR, "version.json")
+
+        with open(server_zip_path, "wb") as f:
+            f.write(zip_bytes)
+        print(f"  -> Disimpan: server/client_files.zip ({len(zip_bytes):,} bytes)")
+
+        import json
+        ver_obj = json.dumps({"hash": extract_hash}, ensure_ascii=False)
+        with open(server_ver_path, "w", encoding="utf-8") as f:
+            f.write(ver_obj)
+        print(f"  -> Disimpan: server/version.json (hash={extract_hash})")
+    else:
+        print("  [!] Folder server/ tidak ditemukan, skip artefak update.")
+
+    # 6. Buat shortcut (.lnk) dengan icon jika icon.ico ada
+    icon_path = os.path.join(os.path.dirname(__file__), "icon.ico")
+    if os.path.exists(icon_path):
+        print("\n[5/5] Membuat shortcut Windows dengan Icon...")
+        shortcut_path = os.path.join(os.path.dirname(__file__), "ChatMD.lnk")
+        
+        abs_shortcut = os.path.abspath(shortcut_path)
+        abs_bat = os.path.abspath(OUTPUT_BAT)
+        abs_icon = os.path.abspath(icon_path)
+        abs_working_dir = os.path.abspath(os.path.dirname(__file__))
+
+        import subprocess
+        ps_cmd = (
+            f"$WshShell = New-Object -ComObject WScript.Shell; "
+            f"$Shortcut = $WshShell.CreateShortcut('{abs_shortcut}'); "
+            f"$Shortcut.TargetPath = '{abs_bat}'; "
+            f"$Shortcut.IconLocation = '{abs_icon}'; "
+            f"$Shortcut.WorkingDirectory = '{abs_working_dir}'; "
+            f"$Shortcut.Save()"
+        )
+        try:
+            subprocess.run(["powershell", "-NoProfile", "-Command", ps_cmd], check=True, capture_output=True)
+            print(f"  -> Shortcut berhasil dibuat: {os.path.basename(shortcut_path)}")
+        except Exception as e:
+            print(f"  [!] Gagal membuat shortcut (.lnk): {e}")
+
     print()
     print("=" * 60)
     print(f"  BERHASIL! Hash versi: {extract_hash}")
     print("  Kirimkan ChatMD.bat saja ke PC lain.")
     print("  Update BAT = folder temp baru = re-ekstrak otomatis!")
+    print("  Auto-update aktif: client akan update sendiri dari server.")
     print("=" * 60)
 
 

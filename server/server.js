@@ -13,11 +13,15 @@
 
 const { WebSocketServer, WebSocket } = require("ws");
 const dgram = require("dgram");
-const os   = require("os");
+const http  = require("http");
+const fs    = require("fs");
+const path  = require("path");
+const os    = require("os");
 
 // ─── Konfigurasi ────────────────────────────────────────────────
 const PORT            = parseInt(process.env.CHATMD_PORT || process.env.VINC_PORT || "8765", 10);
 const DISCOVERY_PORT  = parseInt(process.env.CHATMD_DISC_PORT || "8766", 10);
+const UPDATE_PORT     = PORT + 2;  // HTTP server untuk auto-update client
 const BROADCAST_INTERVAL = 2000; // ms antar broadcast UDP
 const RATE_LIMIT_MAX    = 3;     // maksimal N pesan...
 const RATE_LIMIT_WINDOW = 3000;  // ...dalam X milidetik (sliding window)
@@ -235,6 +239,51 @@ console.log(`[*] Server aktif di ws://${LOCAL_IP}:${PORT}`);
 console.log(`[*] Discovery UDP broadcast di port ${DISCOVERY_PORT}`);
 console.log(`[*] Rate limit: ${RATE_LIMIT_MAX} pesan / ${RATE_LIMIT_WINDOW / 1000} detik`);
 console.log(`[*] Tekan Ctrl+C untuk shutdown\n`);
+
+// ─── HTTP Auto-Update Server ───────────────────────────────────────────────────
+const VERSION_FILE = path.join(__dirname, "version.json");
+const ZIP_FILE     = path.join(__dirname, "client_files.zip");
+
+let versionInfo = null;
+try {
+  versionInfo = JSON.parse(fs.readFileSync(VERSION_FILE, "utf8"));
+} catch (_) {
+  // version.json belum ada — jalankan generate_bat.py terlebih dahulu
+}
+
+if (versionInfo && fs.existsSync(ZIP_FILE)) {
+  const updateServer = http.createServer((req, res) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+
+    if (req.method === "GET" && req.url === "/version") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ hash: versionInfo.hash, port: PORT }));
+
+    } else if (req.method === "GET" && req.url === "/update") {
+      const stat = fs.statSync(ZIP_FILE);
+      res.writeHead(200, {
+        "Content-Type": "application/zip",
+        "Content-Length": stat.size,
+      });
+      fs.createReadStream(ZIP_FILE).pipe(res);
+      console.log(`[^] UPDATE   download dari ${req.socket.remoteAddress}`);
+
+    } else {
+      res.writeHead(404);
+      res.end();
+    }
+  });
+
+  updateServer.listen(UPDATE_PORT, () => {
+    console.log(`[*] Auto-update server aktif di port ${UPDATE_PORT} (versi: ${versionInfo.hash})`);
+  });
+
+  updateServer.on("error", (err) => {
+    console.warn(`[!] Update server error: ${err.message}`);
+  });
+} else {
+  console.log(`[*] Auto-update tidak aktif (version.json/client_files.zip tidak ditemukan).`);
+}
 
 // ─── UDP Discovery (Broadcast + Query-Response) ──────────────────
 // Server bind ke DISCOVERY_PORT agar bisa:

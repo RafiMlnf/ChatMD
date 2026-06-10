@@ -28,3 +28,7 @@ Desktop.ini
 
 # Temp / ZIPs
 client_files.zip
+
+# Windows Shortcuts
+*.lnk
+
