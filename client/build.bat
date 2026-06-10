@@ -32,9 +32,10 @@ echo  [OK] Semua dependensi siap
 :: ── 3. Bersihkan build lama ───────────────────────────────────
 echo.
 echo  [3/4] Membersihkan build sebelumnya...
-if exist "dist\chatmd-client.exe" del /q "dist\chatmd-client.exe"
+if exist "dist\ChatMD.exe" del /q "dist\ChatMD.exe"
+if exist "..\ChatMD.exe" del /q "..\ChatMD.exe"
 if exist "build" rmdir /s /q "build" >nul 2>&1
-if exist "chatmd-client.spec" del /q "chatmd-client.spec" >nul 2>&1
+if exist "ChatMD.spec" del /q "ChatMD.spec" >nul 2>&1
 
 :: ── 4. Build dengan PyInstaller ───────────────────────────────
 echo.
@@ -44,7 +45,8 @@ echo.
 python -m PyInstaller ^
     --onefile ^
     --console ^
-    --name "chatmd-client" ^
+    --name "ChatMD" ^
+    --icon "../icon.ico" ^
     --collect-all cryptography ^
     --collect-all websocket ^
     --hidden-import cryptography.hazmat.primitives.ciphers.aead ^
@@ -62,16 +64,20 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
+:: Salin hasil build ke root workspace
+copy "dist\ChatMD.exe" "..\ChatMD.exe" >nul
+
 :: ── Hasil ──────────────────────────────────────────────────────
 echo.
 echo  ============================================================
 echo   BUILD BERHASIL!
 echo.
-echo   File : dist\chatmd-client.exe
+echo   File : ChatMD.exe (disalin ke root folder)
 echo   Mode : Standalone (tidak butuh Python atau pip)
 echo.
-echo   Distribusikan dist\chatmd-client.exe ke semua laptop.
-echo   User cukup double-click — langsung jalan!
+echo   Distribusikan ChatMD.exe ke semua laptop.
+echo   User cukup double-click — langsung jalan dengan icon!
 echo  ============================================================
 echo.
 pause
+

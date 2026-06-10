@@ -11,7 +11,10 @@ env/
 # PyInstaller / Build / Dist
 client/build/
 client/dist/
+build/
+dist/
 *.spec
+*.exe
 
 # Node.js
 node_modules/
