@@ -1,0 +1,4 @@
+# Beritahu GitHub Linguist untuk mengabaikan file batch biner b64 & file generated agar statistik bahasa akurat
+ChatMD.bat linguist-generated
+client_files.zip linguist-generated
+*.bat linguist-documentation
