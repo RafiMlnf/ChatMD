@@ -12,6 +12,8 @@ import json
 import msvcrt
 import shutil
 import textwrap
+import base64
+import subprocess
 from typing import Optional
 
 # Validasi platform
@@ -119,9 +121,6 @@ def format_message(sender: str, text: str) -> str:
 
     return "\n".join(result)
 
-
-def banner():
-    pass
 
 
 def print_status(msg: str):
@@ -358,14 +357,13 @@ def _process_image_payload(plaintext: str) -> str:
     Return string tampilan singkat.
     """
     try:
-        import base64 as _b64
         # plaintext[7:-1] = "filename:base64data"
         inner = plaintext[7:-1]
         colon_idx = inner.index(":")
         filename  = inner[:colon_idx]
         b64_data  = inner[colon_idx + 1:]
 
-        img_data = _b64.b64decode(b64_data)
+        img_data = base64.b64decode(b64_data)
 
         downloads_dir = os.path.join(os.path.expanduser("~"), "Downloads", "ChatMD_Received")
         os.makedirs(downloads_dir, exist_ok=True)
@@ -383,7 +381,6 @@ def _process_image_payload(plaintext: str) -> str:
             f.write(img_data)
 
         try:
-            import subprocess
             # Buka folder dan pilih file yang diterima di Windows Explorer
             subprocess.Popen(f'explorer /select,"{os.path.normpath(dest_path)}"')
         except Exception:
@@ -684,7 +681,6 @@ def run_chat_session(partner: str):
                     continue
 
                 try:
-                    import base64
                     _, ext = os.path.splitext(file_path)
                     ext_clean = ext.lower()
                     is_img = ext_clean in ALLOWED_IMAGE_EXTS
@@ -819,7 +815,6 @@ def check_for_update(server_ip: str) -> bool:
     import urllib.request
     import zipfile
     import io
-    import subprocess
 
     url_version = f"http://{server_ip}:{UPDATE_PORT}/version"
     try:
@@ -889,7 +884,6 @@ def main():
     global g_username, g_server_ip
 
     clear()
-    banner()
 
     # 1. Ambil identitas user (bisa dari CLI args untuk override nama, berguna untuk test)
     if len(sys.argv) > 1:

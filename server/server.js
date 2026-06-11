@@ -17,6 +17,7 @@ const http  = require("http");
 const fs    = require("fs");
 const path  = require("path");
 const os    = require("os");
+const readline = require("readline");
 
 // ─── Konfigurasi File Filter ─────────────────────────────────────
 const CONFIG_FILE = path.join(__dirname, "config.json");
@@ -92,7 +93,6 @@ function getLocalIP() {
 const SESSION_TOKEN = generateToken();
 const LOCAL_IP      = getLocalIP();
 
-const readline = require("readline");
 
 // ─── Keybind & Menu System ───────────────────────────────────────
 let menuActive = false;
