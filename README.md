@@ -1,13 +1,13 @@
 # ChatMD <img src="icon.png" width="32" height="32" />
 
-Aplikasi pesan instan privat berbasis LAN dengan sistem token discovery. Tanpa database, tanpa log file, dan riwayat pesan hanya tersimpan di RAM.  
+Aplikasi pesan instan privat intranet dengan sistem token discovery. Tanpa database, tanpa log file, dan riwayat pesan hanya tersimpan di RAM.  
 
 Aplikasi ini saya buat karena keluh kesah memiliki laptop kentang ram 4GB :(, bahkan load WhatsApp butuh waktu 2-3 menit. Banyak kondisi urgent ketika saya dikantor, perlu komunikasi/kirim terima file secara cepat.
 
 ## Unduh & Persyaratan
 
 * **Client**: Windows OS (tinggal jalankan `ChatMD.exe`, tanpa perlu Python).
-  * 📥 **[Download ChatMD.exe Terbaru di GitHub Releases](https://github.com/RafiMlnf/ChatMD/releases)**
+  * **[Download ChatMD.exe di GitHub Releases](https://github.com/RafiMlnf/ChatMD/releases)**
 * **Server**: Node.js (hanya di PC host server).
 
 ## Cara Penggunaan
