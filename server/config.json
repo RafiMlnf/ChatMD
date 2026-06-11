@@ -1,0 +1,17 @@
+{
+  "allowed_file_types": {
+    "png": true,
+    "jpg": true,
+    "jpeg": true,
+    "gif": false,
+    "webp": false,
+    "bmp": false,
+    "xls": true,
+    "xlsx": true,
+    "txt": true,
+    "pdf": true,
+    "csv": true,
+    "ppt": true,
+    "pptx": true
+  }
+}

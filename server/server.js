@@ -18,6 +18,43 @@ const fs    = require("fs");
 const path  = require("path");
 const os    = require("os");
 
+// ─── Konfigurasi File Filter ─────────────────────────────────────
+const CONFIG_FILE = path.join(__dirname, "config.json");
+let allowedFileTypes = {
+  "png": true,
+  "jpg": true,
+  "jpeg": true,
+  "gif": true,
+  "webp": true,
+  "bmp": true,
+  "xls": true,
+  "xlsx": true,
+  "txt": true,
+  "pdf": true,
+  "csv": true,
+  "ppt": true,
+  "pptx": true
+};
+
+const startupLogs = [];
+
+try {
+  if (fs.existsSync(CONFIG_FILE)) {
+    const data = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8"));
+    if (data && typeof data.allowed_file_types === "object") {
+      allowedFileTypes = { ...data.allowed_file_types };
+    }
+  } else {
+    const defaultConfig = {
+      allowed_file_types: allowedFileTypes
+    };
+    fs.writeFileSync(CONFIG_FILE, JSON.stringify(defaultConfig, null, 2), "utf8");
+    startupLogs.push("[*] File config.json default dibuat");
+  }
+} catch (err) {
+  startupLogs.push(`[!] Gagal memuat/menulis config.json: ${err.message}`);
+}
+
 // ─── Konfigurasi ────────────────────────────────────────────────
 const PORT            = parseInt(process.env.CHATMD_PORT || process.env.VINC_PORT || "8765", 10);
 const DISCOVERY_PORT  = parseInt(process.env.CHATMD_DISC_PORT || "8766", 10);
@@ -55,6 +92,185 @@ function getLocalIP() {
 const SESSION_TOKEN = generateToken();
 const LOCAL_IP      = getLocalIP();
 
+const readline = require("readline");
+
+// ─── Keybind & Menu System ───────────────────────────────────────
+let menuActive = false;
+let menuSelectedIndex = 0;
+const logBuffer = [];
+let waitingForShutdownConfirmation = false;
+
+function serverLog(...args) {
+  const msg = args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : arg).join(' ');
+  if (menuActive) {
+    logBuffer.push(msg);
+  } else {
+    console.log(msg);
+  }
+}
+
+function serverWarn(...args) {
+  const msg = args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : arg).join(' ');
+  if (menuActive) {
+    logBuffer.push(`\x1b[33m${msg}\x1b[0m`);
+  } else {
+    console.warn(msg);
+  }
+}
+
+function serverError(...args) {
+  const msg = args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : arg).join(' ');
+  if (menuActive) {
+    logBuffer.push(`\x1b[31m${msg}\x1b[0m`);
+  } else {
+    console.error(msg);
+  }
+}
+
+function renderMenu() {
+  console.clear();
+  console.log("\x1b[36m==================================================\x1b[0m");
+  console.log("\x1b[1m\x1b[35m         CHATMD SERVER - FILE FILTER LIST         \x1b[0m");
+  console.log("\x1b[36m==================================================\x1b[0m");
+  console.log(" Gunakan [\x1b[1m▲\x1b[0m/\x1b[1m▼\x1b[0m] Panah untuk pilih, [\x1b[1mSpasi\x1b[0m] untuk toggle");
+  console.log(" Tekan [\x1b[1mEnter\x1b[0m] untuk simpan, [\x1b[1mCtrl+L\x1b[0m] / [\x1b[1mEsc\x1b[0m] untuk batal\n");
+
+  const fileTypeKeys = Object.keys(allowedFileTypes);
+  for (let i = 0; i < fileTypeKeys.length; i++) {
+    const key = fileTypeKeys[i];
+    const isSelected = i === menuSelectedIndex;
+    const isChecked = allowedFileTypes[key];
+
+    const cursorStr = isSelected ? "\x1b[33m > \x1b[0m" : "   ";
+    const checkboxStr = isChecked ? "\x1b[32m[X]\x1b[0m" : "\x1b[31m[ ]\x1b[0m";
+    const labelStr = isSelected ? `\x1b[1m\x1b[37m${key}\x1b[0m` : `\x1b[90m${key}\x1b[0m`;
+
+    console.log(`${cursorStr}${checkboxStr} ${labelStr}`);
+  }
+  console.log("\x1b[36m==================================================\x1b[0m");
+}
+
+function loadConfig() {
+  try {
+    if (fs.existsSync(CONFIG_FILE)) {
+      const data = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8"));
+      if (data && typeof data.allowed_file_types === "object") {
+        allowedFileTypes = { ...data.allowed_file_types };
+      }
+    }
+  } catch (err) {
+    // Silent fail
+  }
+}
+
+function exitMenu(saveChanges) {
+  menuActive = false;
+  console.clear();
+  
+  let statusMsg = "";
+  if (saveChanges) {
+    try {
+      const configData = {
+        allowed_file_types: allowedFileTypes
+      };
+      fs.writeFileSync(CONFIG_FILE, JSON.stringify(configData, null, 2), "utf8");
+      statusMsg = "\x1b[32m[*] Konfigurasi disimpan dan diterapkan!\x1b[0m\n";
+    } catch (err) {
+      statusMsg = `\x1b[31m[!] Gagal menyimpan config.json: ${err.message}\x1b[0m\n`;
+    }
+  } else {
+    loadConfig();
+    statusMsg = "\x1b[33m[*] Perubahan dibatalkan.\x1b[0m\n";
+  }
+
+  // Print initial server info
+  console.log("--------------------------------------------");
+  console.log(`  IP Address : ${LOCAL_IP}`);
+  console.log(`  Port       : ${PORT}`);
+  console.log(`  TOKEN      : ${SESSION_TOKEN}`);
+  console.log("--------------------------------------------\n");
+
+  if (statusMsg) {
+    console.log(statusMsg);
+  }
+
+  console.log(`[*] Server aktif di ws://${LOCAL_IP}:${PORT}`);
+  console.log(`[*] Discovery UDP broadcast di port ${DISCOVERY_PORT}`);
+  console.log(`[*] Rate limit: ${RATE_LIMIT_MAX} pesan / ${RATE_LIMIT_WINDOW / 1000} detik`);
+  console.log(`[*] Tekan Ctrl+C untuk shutdown`);
+  console.log(`[*] Tekan Ctrl+L untuk membuka menu filter file\n`);
+
+  // Flush buffered logs
+  if (logBuffer.length > 0) {
+    console.log("[*] Riwayat aktivitas selama menu dibuka:");
+    while (logBuffer.length > 0) {
+      console.log(logBuffer.shift());
+    }
+    console.log("");
+  }
+}
+
+function handleServerKeypress(str, key) {
+  if (!key) return;
+  if (key.ctrl && key.name === 'c') {
+    shutdown();
+    return;
+  }
+
+  if (waitingForShutdownConfirmation) {
+    const char = str ? str.toLowerCase() : "";
+    if (char === 'y') {
+      waitingForShutdownConfirmation = false;
+      process.stdout.write("Y\n");
+      shutdown();
+      return;
+    } else if (char === 'n' || key.name === 'escape') {
+      waitingForShutdownConfirmation = false;
+      const inputChar = key.name === 'escape' ? 'Esc' : 'N';
+      process.stdout.write(`${inputChar}\n\x1b[32m[*] Server tetap berjalan.\x1b[0m\n\n`);
+      return;
+    }
+    return; // block other keypresses
+  }
+
+  if (key.ctrl && key.name === 'l') {
+    if (!menuActive) {
+      menuActive = true;
+      menuSelectedIndex = 0;
+      renderMenu();
+    } else {
+      exitMenu(false); // Cancel
+    }
+    return;
+  }
+
+  if (menuActive) {
+    const fileTypeKeys = Object.keys(allowedFileTypes);
+    if (key.name === 'up') {
+      menuSelectedIndex = (menuSelectedIndex - 1 + fileTypeKeys.length) % fileTypeKeys.length;
+      renderMenu();
+    } else if (key.name === 'down') {
+      menuSelectedIndex = (menuSelectedIndex + 1) % fileTypeKeys.length;
+      renderMenu();
+    } else if (key.name === 'space') {
+      const typeKey = fileTypeKeys[menuSelectedIndex];
+      allowedFileTypes[typeKey] = !allowedFileTypes[typeKey];
+      renderMenu();
+    } else if (key.name === 'return') {
+      exitMenu(true); // Save
+    } else if (key.name === 'escape') {
+      exitMenu(false); // Cancel
+    }
+  }
+}
+
+readline.emitKeypressEvents(process.stdin);
+if (process.stdin.isTTY) {
+  process.stdin.setRawMode(true);
+  process.stdin.resume();
+  process.stdin.on('keypress', handleServerKeypress);
+}
+
 // ─── In-Memory Storage ──────────────────────────────────────────
 // Map<socketId, { username: string, socket: WebSocket, msgTimestamps: number[] }>
 const users = new Map();
@@ -71,7 +287,7 @@ function broadcastUserList() {
     .map((u) => u.username);
   const payload = JSON.stringify({ type: "user_list", users: userList });
 
-  console.log(`[*] Broadcast daftar user aktif (${userList.length} user): [${userList.join(", ")}]`);
+  serverLog(`[*] Broadcast daftar user aktif (${userList.length} user): [${userList.join(", ")}]`);
 
   for (const [, userData] of users) {
     if (userData.socket.readyState === WebSocket.OPEN) {
@@ -132,7 +348,7 @@ function handleRegister(socketId, userData, data) {
 
   // Validasi username: alfanumerik + spasi + underscore + dash + titik + @ , 1–32 karakter
   if (!/^[\w\-.@ ]{1,32}$/.test(raw)) {
-    console.warn(`[!] REGISTER FAILED: Username "${raw}" invalid format (ip=${userData.ip})`);
+    serverWarn(`[!] REGISTER FAILED: Username "${raw}" invalid format (ip=${userData.ip})`);
     sendTo(userData.socket, {
       type: "error",
       message: "Username tidak valid. Gunakan huruf, angka, titik, atau dash.",
@@ -143,7 +359,7 @@ function handleRegister(socketId, userData, data) {
   // Cek duplikasi username
   const existing = findUserByName(raw);
   if (existing) {
-    console.warn(`[!] REGISTER FAILED: Username "${raw}" already in use (ip=${userData.ip})`);
+    serverWarn(`[!] REGISTER FAILED: Username "${raw}" already in use (ip=${userData.ip})`);
     sendTo(userData.socket, {
       type: "error",
       message: `Username "${raw}" sudah digunakan. Tutup sesi lama terlebih dahulu.`,
@@ -152,7 +368,7 @@ function handleRegister(socketId, userData, data) {
   }
 
   userData.username = raw;
-  console.log(`[+] REGISTER  id=${socketId} username=${raw}`);
+  serverLog(`[+] REGISTER  id=${socketId} username=${raw}`);
 
   sendTo(userData.socket, {
     type: "registered",
@@ -175,6 +391,7 @@ function handleMessage(socketId, senderData, data) {
 
   const toUsername = (data.to || "").trim();
   const payload = data.payload; // string terenkripsi AES-GCM (hex)
+  const fileExt = data.file_ext; // metadata file extension (optional)
 
   if (!toUsername || !payload) {
     sendTo(senderData.socket, {
@@ -190,6 +407,19 @@ function handleMessage(socketId, senderData, data) {
       message: "Anda harus register terlebih dahulu.",
     });
     return;
+  }
+
+  // Filter file berdasarkan ekstensi jika dikirim
+  if (fileExt) {
+    const extClean = fileExt.toLowerCase().trim();
+    if (!allowedFileTypes[extClean]) {
+      serverWarn(`[!] BLOCKED FILE: ${senderData.username} mencoba mengirim file .${extClean} ke ${toUsername} (Dilarang server)`);
+      sendTo(senderData.socket, {
+        type: "error",
+        message: `Pengiriman file dengan ekstensi '.${extClean}' dilarang oleh server.`,
+      });
+      return;
+    }
   }
 
   // Cari target
@@ -209,6 +439,7 @@ function handleMessage(socketId, senderData, data) {
     type: "message",
     from: senderData.username,
     payload: payload,
+    file_ext: fileExt,
   });
 
   // Konfirmasi ke pengirim (opsional, untuk acknowledgement)
@@ -217,8 +448,8 @@ function handleMessage(socketId, senderData, data) {
     to: toUsername,
   });
 
-  console.log(
-    `[>] MSG  ${senderData.username} → ${toUsername}  (${payload.length} chars)`
+  serverLog(
+    `[>] MSG  ${senderData.username} → ${toUsername}  (${payload.length} chars)${fileExt ? ` [FILE: .${fileExt}]` : ""}`
   );
 }
 
@@ -230,15 +461,24 @@ function handlePing(userData) {
 
 const wss = new WebSocketServer({ port: PORT });
 
+console.clear();
 console.log("--------------------------------------------");
 console.log(`  IP Address : ${LOCAL_IP}`);
 console.log(`  Port       : ${PORT}`);
 console.log(`  TOKEN      : ${SESSION_TOKEN}`);
 console.log("--------------------------------------------\n");
+
+if (startupLogs.length > 0) {
+  for (const log of startupLogs) {
+    console.log(log);
+  }
+}
+
 console.log(`[*] Server aktif di ws://${LOCAL_IP}:${PORT}`);
 console.log(`[*] Discovery UDP broadcast di port ${DISCOVERY_PORT}`);
 console.log(`[*] Rate limit: ${RATE_LIMIT_MAX} pesan / ${RATE_LIMIT_WINDOW / 1000} detik`);
-console.log(`[*] Tekan Ctrl+C untuk shutdown\n`);
+console.log(`[*] Tekan Ctrl+C untuk shutdown`);
+console.log(`[*] Tekan Ctrl+L untuk membuka menu filter file\n`);
 
 // ─── HTTP Auto-Update Server ───────────────────────────────────────────────────
 const VERSION_FILE = path.join(__dirname, "version.json");
@@ -266,7 +506,7 @@ if (versionInfo && fs.existsSync(ZIP_FILE)) {
         "Content-Length": stat.size,
       });
       fs.createReadStream(ZIP_FILE).pipe(res);
-      console.log(`[^] UPDATE   download dari ${req.socket.remoteAddress}`);
+      serverLog(`[^] UPDATE   download dari ${req.socket.remoteAddress}`);
 
     } else {
       res.writeHead(404);
@@ -275,14 +515,14 @@ if (versionInfo && fs.existsSync(ZIP_FILE)) {
   });
 
   updateServer.listen(UPDATE_PORT, () => {
-    console.log(`[*] Auto-update server aktif di port ${UPDATE_PORT} (versi: ${versionInfo.hash})`);
+    serverLog(`[*] Auto-update server aktif di port ${UPDATE_PORT} (versi: ${versionInfo.hash})`);
   });
 
   updateServer.on("error", (err) => {
-    console.warn(`[!] Update server error: ${err.message}`);
+    serverWarn(`[!] Update server error: ${err.message}`);
   });
 } else {
-  console.log(`[*] Auto-update tidak aktif (version.json/client_files.zip tidak ditemukan).`);
+  serverLog(`[*] Auto-update tidak aktif (version.json/client_files.zip tidak ditemukan).`);
 }
 
 // ─── UDP Discovery (Broadcast + Query-Response) ──────────────────
@@ -305,7 +545,7 @@ udpSock.on("message", (data, rinfo) => {
 });
 
 udpSock.on("error", (err) => {
-  console.warn(`[!] UDP error: ${err.message}`);
+  serverWarn(`[!] UDP error: ${err.message}`);
 });
 
 udpSock.bind(DISCOVERY_PORT, () => {
@@ -314,7 +554,7 @@ udpSock.bind(DISCOVERY_PORT, () => {
   setInterval(() => {
     udpSock.send(discPayload, 0, discPayload.length, DISCOVERY_PORT, "255.255.255.255");
   }, BROADCAST_INTERVAL);
-  console.log(`[*] UDP discovery aktif di port ${DISCOVERY_PORT} (token=${SESSION_TOKEN})\n`);
+  serverLog(`[*] UDP discovery aktif di port ${DISCOVERY_PORT} (token=${SESSION_TOKEN})\n`);
 });
 
 let hasHadClients = false;
@@ -333,7 +573,13 @@ wss.on("connection", (socket, req) => {
 
   users.set(socketId, userData);
   hasHadClients = true;
-  console.log(`[~] CONNECT   id=${socketId} ip=${remoteIp} (total: ${users.size})`);
+
+  if (waitingForShutdownConfirmation) {
+    waitingForShutdownConfirmation = false;
+    process.stdout.write("\n\x1b[32m[*] Klien baru terhubung. Pembatalan otomatis konfirmasi shutdown.\x1b[0m\n\n");
+  }
+
+  serverLog(`[~] CONNECT   id=${socketId} ip=${remoteIp} (total: ${users.size})`);
 
   // ── Handler pesan masuk ──
   socket.on("message", (raw) => {
@@ -367,7 +613,7 @@ wss.on("connection", (socket, req) => {
   socket.on("close", (code, reason) => {
     const name = userData.username || `<unregistered#${socketId}>`;
     users.delete(socketId);
-    console.log(
+    serverLog(
       `[-] DISCONNECT id=${socketId} username=${name} (total: ${users.size})`
     );
     // Broadcast list terbaru ke sisa user
@@ -375,14 +621,18 @@ wss.on("connection", (socket, req) => {
 
     // Auto-shutdown jika semua klien sudah keluar
     if (hasHadClients && users.size === 0) {
-      console.log("[*] Semua klien telah terputus. Mematikan server...");
-      shutdown();
+      waitingForShutdownConfirmation = true;
+      if (menuActive) {
+        serverLog("\x1b[33m[?] Semua klien telah terputus. Matikan server? (Y/N): \x1b[0m");
+      } else {
+        process.stdout.write("\n\x1b[33m[?] Semua klien telah terputus. Matikan server? (Y/N): \x1b[0m");
+      }
     }
   });
 
   // ── Handler error ──
   socket.on("error", (err) => {
-    console.error(`[!] ERROR id=${socketId}: ${err.message}`);
+    serverError(`[!] ERROR id=${socketId}: ${err.message}`);
     users.delete(socketId);
     broadcastUserList();
   });
@@ -390,16 +640,16 @@ wss.on("connection", (socket, req) => {
 
 wss.on("error", (err) => {
   if (err.code === "EADDRINUSE") {
-    console.error(`[FATAL] Port ${PORT} sudah digunakan. Ganti port atau matikan proses lain.`);
+    serverError(`[FATAL] Port ${PORT} sudah digunakan. Ganti port atau matikan proses lain.`);
   } else {
-    console.error(`[FATAL] Server error: ${err.message}`);
+    serverError(`[FATAL] Server error: ${err.message}`);
   }
   process.exit(1);
 });
 
 // ── Graceful shutdown ──
 function shutdown() {
-  console.log("\n[*] Shutdown... menutup semua koneksi.");
+  serverLog("\n[*] Shutdown... menutup semua koneksi.");
   for (const [, userData] of users) {
     sendTo(userData.socket, {
       type: "error",
@@ -410,7 +660,7 @@ function shutdown() {
   users.clear();
   udpSock.close();
   wss.close(() => {
-    console.log("[*] Server berhenti. Sampai jumpa!");
+    serverLog("[*] Server berhenti. Sampai jumpa!");
     process.exit(0);
   });
 }

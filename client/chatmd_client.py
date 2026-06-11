@@ -10,6 +10,8 @@ import threading
 import time
 import json
 import msvcrt
+import shutil
+import textwrap
 from typing import Optional
 
 # Validasi platform
@@ -78,6 +80,46 @@ def clear():
     os.system("cls")
 
 
+def format_message(sender: str, text: str) -> str:
+    """
+    Format pesan agar teks panjang dibungkus (wrapped) dan baris kedua dst.
+    sejajar dengan titik dua (:).
+    """
+    try:
+        columns, _ = shutil.get_terminal_size()
+    except Exception:
+        columns = 80
+
+    prefix = f"  {sender:<32} : "
+    prefix_len = len(prefix)  # 37
+    wrap_width = max(30, columns - prefix_len)
+
+    paragraphs = text.splitlines()
+    wrapped_lines = []
+
+    for paragraph in paragraphs:
+        if not paragraph:
+            wrapped_lines.append("")
+        else:
+            lines = textwrap.wrap(
+                paragraph,
+                width=wrap_width,
+                break_long_words=True,
+                replace_whitespace=False
+            )
+            wrapped_lines.extend(lines)
+
+    if not wrapped_lines:
+        return prefix
+
+    result = [f"{prefix}{wrapped_lines[0]}"]
+    indent = " " * prefix_len
+    for line in wrapped_lines[1:]:
+        result.append(f"{indent}{line}")
+
+    return "\n".join(result)
+
+
 def banner():
     pass
 
@@ -142,7 +184,9 @@ class TerminalChatUI:
 
     def start(self):
         clear()
-        print(f"  Kepada : {self.partner_name} --------------- [/b] Kembali | Drag & Drop untuk Kirim Gambar\n")
+        print("[/b] Kembali | [Drag & Drop] Kirim File\n")
+        print(f"  Kepada : {self.partner_name}")
+        print("\n")
 
     def print_message(self, sender: str, text: str):
         with self.lock:
@@ -153,7 +197,7 @@ class TerminalChatUI:
             sys.stdout.write("\r" + " " * (current_input_len + 4) + "\r")
             
             # 2. Cetak pesan baru
-            sys.stdout.write(f"  {sender:<32} : {text}\n")
+            sys.stdout.write(format_message(sender, text) + "\n")
             
             # 3. Kembalikan prompt dan apa yang sedang diketik user (jika sedang di input)
             if self.in_get_input:
@@ -339,13 +383,20 @@ def _process_image_payload(plaintext: str) -> str:
             f.write(img_data)
 
         try:
-            os.startfile(dest_path)
+            import subprocess
+            # Buka folder dan pilih file yang diterima di Windows Explorer
+            subprocess.Popen(f'explorer /select,"{os.path.normpath(dest_path)}"')
         except Exception:
-            pass
+            try:
+                os.startfile(downloads_dir)
+            except Exception:
+                pass
 
-        return f"[GAMBAR: {unique_name}] (Tersimpan di Downloads/ChatMD_Received)"
+        is_img = ext.lower() in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")
+        label = "GAMBAR" if is_img else "FILE"
+        return f"[{label}: {unique_name}] (Tersimpan di Downloads/ChatMD_Received)"
     except Exception as e:
-        return f"[GAMBAR: Gagal memproses: {e}]"
+        return f"[FILE: Gagal memproses: {e}]"
 
 
 def _handle_incoming_message(data: dict):
@@ -560,7 +611,7 @@ def run_chat_session(partner: str):
             # Update entry di history agar tidak di-download ulang
             with g_sessions_lock:
                 msg["text"] = text
-        sys.stdout.write(f"  {msg['sender']:<32} : {text}\n")
+        sys.stdout.write(format_message(msg['sender'], text) + "\n")
     sys.stdout.flush()
 
     try:
@@ -585,57 +636,70 @@ def run_chat_session(partner: str):
                 ui.print_message("Sistem", "Tidak terhubung ke server. Pesan gagal terkirim.")
                 continue
 
-            # Cek apakah input adalah perintah kirim gambar atau drag-and-drop file langsung
-            is_image_cmd = False
-            img_path = None
+            # Daftar tipe file yang diizinkan (Gambar + Dokumen)
+            ALLOWED_IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")
+            ALLOWED_DOC_EXTS = (".xls", ".xlsx", ".txt", ".pdf", ".csv", ".ppt", ".pptx")
+            ALLOWED_ALL_EXTS = ALLOWED_IMAGE_EXTS + ALLOWED_DOC_EXTS
+
+            # Cek apakah input adalah perintah kirim file atau drag-and-drop file langsung
+            is_file_cmd = False
+            file_path = None
 
             # Deteksi drag & drop otomatis jika input berupa file path yang ada di lokal disk
             path_check = text_strip.strip("'\"")
             if os.path.exists(path_check) and os.path.isfile(path_check):
                 _, ext = os.path.splitext(path_check)
-                if ext.lower() in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"):
-                    is_image_cmd = True
-                    img_path = path_check
+                if ext.lower() in ALLOWED_ALL_EXTS:
+                    is_file_cmd = True
+                    file_path = path_check
                 else:
-                    ui.print_message("Sistem", f"File terdeteksi, namun tipe '{ext}' bukan gambar (.png, .jpg, dll).")
+                    allowed_str = ", ".join(ALLOWED_ALL_EXTS)
+                    ui.print_message("Sistem", f"File terdeteksi, namun tipe '{ext}' tidak diizinkan. Diizinkan: {allowed_str}")
                     continue
-            elif text_strip.lower().startswith("/i "):
-                is_image_cmd = True
-                img_path = text_strip[3:].strip()
-            elif text_strip.lower().startswith("/img "):
-                is_image_cmd = True
-                img_path = text_strip[5:].strip()
+            elif text_strip.lower().startswith(("/i ", "/img ")):
+                is_file_cmd = True
+                parts = text_strip.split(None, 1)
+                file_path = parts[1].strip() if len(parts) > 1 else ""
+            elif text_strip.lower().startswith(("/f ", "/file ")):
+                is_file_cmd = True
+                parts = text_strip.split(None, 1)
+                file_path = parts[1].strip() if len(parts) > 1 else ""
 
-            if is_image_cmd:
-                if not img_path:
-                    ui.print_message("Sistem", "Gunakan: /i <path_gambar> atau /img <path_gambar>")
+            if is_file_cmd:
+                if not file_path:
+                    ui.print_message("Sistem", "Gunakan: /f <path_file> atau /file <path_file>")
                     continue
 
                 # Bersihkan tanda kutip dari Windows drag-and-drop
-                img_path = img_path.strip("'\"")
+                file_path = file_path.strip("'\"")
 
-                if not os.path.exists(img_path) or not os.path.isfile(img_path):
-                    ui.print_message("Sistem", f"File tidak ditemukan: {img_path}")
+                if not os.path.exists(file_path) or not os.path.isfile(file_path):
+                    ui.print_message("Sistem", f"File tidak ditemukan: {file_path}")
                     continue
 
                 # Cek ukuran file (maks 10MB)
                 MAX_SIZE = 10 * 1024 * 1024
-                if os.path.getsize(img_path) > MAX_SIZE:
-                    ui.print_message("Sistem", "Ukuran gambar terlalu besar (maksimal 10MB).")
+                if os.path.getsize(file_path) > MAX_SIZE:
+                    ui.print_message("Sistem", "Ukuran file terlalu besar (maksimal 10MB).")
                     continue
 
                 try:
                     import base64
-                    ui.print_message("Sistem", "Membaca dan mengirim gambar...")
-                    with open(img_path, "rb") as f:
+                    _, ext = os.path.splitext(file_path)
+                    ext_clean = ext.lower()
+                    is_img = ext_clean in ALLOWED_IMAGE_EXTS
+                    label = "GAMBAR" if is_img else "FILE"
+
+                    ui.print_message("Sistem", f"Membaca dan mengirim {label.lower()}...")
+                    with open(file_path, "rb") as f:
                         file_bytes = f.read()
                     b64_str = base64.b64encode(file_bytes).decode("utf-8")
-                    filename = os.path.basename(img_path)
+                    filename = os.path.basename(file_path)
                     
                     message_payload = f"[IMAGE:{filename}:{b64_str}]"
-                    display_text = f"[GAMBAR: {filename}] (Terkirim)"
+                    display_text = f"[{label}: {filename}] (Terkirim)"
                 except Exception as e:
-                    ui.print_message("Sistem", f"Gagal membaca gambar: {e}")
+                    ui.print_message("Sistem", f"Gagal membaca file: {e}")
                     continue
             else:
                 message_payload = text_strip
@@ -644,11 +708,16 @@ def run_chat_session(partner: str):
             # Enkripsi dan kirim pesan
             try:
                 encrypted = encrypt(message_payload)
-                payload = json.dumps({
+                msg_data = {
                     "type": "message",
                     "to": partner,
                     "payload": encrypted,
-                })
+                }
+                if is_file_cmd:
+                    _, ext = os.path.splitext(file_path)
+                    msg_data["file_ext"] = ext.strip(".").lower()
+
+                payload = json.dumps(msg_data)
                 g_ws.send(payload)
             except Exception as e:
                 ui.print_message("Sistem", f"Gagal mengirim pesan: {e}")
