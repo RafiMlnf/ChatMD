@@ -11,43 +11,25 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v3
+        uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v2
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
 
-      - name: Build Web App Bundle
-        run: |
-          mkdir -p android/app/src/main/assets
-          cp server/public/index.html android/app/src/main/assets/index.html
-
-      - name: Build APK with Gradle
+      - name: Generate Gradle Wrapper & Build APK
         run: |
           cd android
-          if [ -f gradlew ]; then
-            chmod +x gradlew
-            ./gradlew assembleDebug
-          else
-            gradle assembleDebug || android update project -p . && ant debug || exit 1
-          fi
-        continue-on-error: true
-
-      - name: Fallback Build APK via PWABuilder / HTML Wrapper
-        if: steps.build-apk.outcome != 'success'
-        run: |
-          npm install -g @bubblewrap/cli
-          echo "Building fallback APK..."
+          gradle wrapper --gradle-version 8.1.1
+          ./gradlew assembleDebug --no-daemon
 
       - name: Upload APK Artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: ChatMD-Mobile-APK
-          path: |
-            android/app/build/outputs/apk/**/*.apk
-            *.apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
