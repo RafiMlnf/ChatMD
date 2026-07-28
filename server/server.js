@@ -457,73 +457,73 @@ function handlePing(userData) {
   sendTo(userData.socket, { type: "pong" });
 }
 
-// ─── Main Server ─────────────────────────────────────────────────
-
-const wss = new WebSocketServer({ port: PORT });
-
-console.clear();
-console.log("--------------------------------------------");
-console.log(`  IP Address : ${LOCAL_IP}`);
-console.log(`  Port       : ${PORT}`);
-console.log(`  TOKEN      : ${SESSION_TOKEN}`);
-console.log("--------------------------------------------\n");
-
-if (startupLogs.length > 0) {
-  for (const log of startupLogs) {
-    console.log(log);
-  }
-}
-
-console.log(`[*] Server aktif di ws://${LOCAL_IP}:${PORT}`);
-console.log(`[*] Discovery UDP broadcast di port ${DISCOVERY_PORT}`);
-console.log(`[*] Rate limit: ${RATE_LIMIT_MAX} pesan / ${RATE_LIMIT_WINDOW / 1000} detik`);
-console.log(`[*] Tekan Ctrl+C untuk shutdown`);
-console.log(`[*] Tekan Ctrl+L untuk membuka menu filter file\n`);
-
-// ─── HTTP Auto-Update Server ───────────────────────────────────────────────────
+// ─── Main Server & HTTP Static Web Client ─────────────────────────────────
 const VERSION_FILE = path.join(__dirname, "version.json");
 const ZIP_FILE     = path.join(__dirname, "client_files.zip");
+const PUBLIC_DIR   = path.join(__dirname, "public");
 
 let versionInfo = null;
 try {
   versionInfo = JSON.parse(fs.readFileSync(VERSION_FILE, "utf8"));
 } catch (_) {
-  // version.json belum ada — jalankan generate_bat.py terlebih dahulu
+  // version.json belum ada
 }
 
-if (versionInfo && fs.existsSync(ZIP_FILE)) {
-  const updateServer = http.createServer((req, res) => {
-    res.setHeader("Access-Control-Allow-Origin", "*");
+const httpServer = http.createServer((req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
 
-    if (req.method === "GET" && req.url === "/version") {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ hash: versionInfo.hash, port: PORT }));
+  const reqPath = req.url.split("?")[0];
 
-    } else if (req.method === "GET" && req.url === "/update") {
-      const stat = fs.statSync(ZIP_FILE);
-      res.writeHead(200, {
-        "Content-Type": "application/zip",
-        "Content-Length": stat.size,
-      });
-      fs.createReadStream(ZIP_FILE).pipe(res);
-      serverLog(`[^] UPDATE   download dari ${req.socket.remoteAddress}`);
-
-    } else {
-      res.writeHead(404);
-      res.end();
+  if (req.method === "GET" && (reqPath === "/" || reqPath === "/index.html")) {
+    const indexPath = path.join(PUBLIC_DIR, "index.html");
+    if (fs.existsSync(indexPath)) {
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      fs.createReadStream(indexPath).pipe(res);
+      return;
     }
-  });
+  } else if (req.method === "GET" && reqPath === "/version" && versionInfo) {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ hash: versionInfo.hash, port: PORT }));
+    return;
+  } else if (req.method === "GET" && reqPath === "/update" && fs.existsSync(ZIP_FILE)) {
+    const stat = fs.statSync(ZIP_FILE);
+    res.writeHead(200, {
+      "Content-Type": "application/zip",
+      "Content-Length": stat.size,
+    });
+    fs.createReadStream(ZIP_FILE).pipe(res);
+    serverLog(`[^] UPDATE   download dari ${req.socket.remoteAddress}`);
+    return;
+  }
 
-  updateServer.listen(UPDATE_PORT, () => {
-    serverLog(`[*] Auto-update server aktif di port ${UPDATE_PORT} (versi: ${versionInfo.hash})`);
-  });
+  res.writeHead(404);
+  res.end("Not Found");
+});
 
-  updateServer.on("error", (err) => {
-    serverWarn(`[!] Update server error: ${err.message}`);
-  });
-} else {
-  serverLog(`[*] Auto-update tidak aktif (version.json/client_files.zip tidak ditemukan).`);
-}
+const wss = new WebSocketServer({ server: httpServer });
+
+httpServer.listen(PORT, () => {
+  console.clear();
+  console.log("--------------------------------------------");
+  console.log(`  IP Address : ${LOCAL_IP}`);
+  console.log(`  Port       : ${PORT}`);
+  console.log(`  TOKEN      : ${SESSION_TOKEN}`);
+  console.log(`  Web Client : http://${LOCAL_IP}:${PORT}`);
+  console.log("--------------------------------------------\n");
+
+  if (startupLogs.length > 0) {
+    for (const log of startupLogs) {
+      console.log(log);
+    }
+  }
+
+  console.log(`[*] Server aktif di ws://${LOCAL_IP}:${PORT}`);
+  console.log(`[*] Web Mobile Client aktif di http://${LOCAL_IP}:${PORT}`);
+  console.log(`[*] Discovery UDP broadcast di port ${DISCOVERY_PORT}`);
+  console.log(`[*] Rate limit: ${RATE_LIMIT_MAX} pesan / ${RATE_LIMIT_WINDOW / 1000} detik`);
+  console.log(`[*] Tekan Ctrl+C untuk shutdown`);
+  console.log(`[*] Tekan Ctrl+L untuk membuka menu filter file\n`);
+});
 
 // ─── UDP Discovery (Broadcast + Query-Response) ──────────────────
 // Server bind ke DISCOVERY_PORT agar bisa:
