@@ -19,6 +19,17 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Accept Android Licenses
+        run: yes | sdkmanager --licenses || true
+
+      - name: Copy latest Mobile Web App to Android Assets
+        run: |
+          mkdir -p android/app/src/main/assets
+          cp server/public/index.html android/app/src/main/assets/index.html
+
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
 
@@ -26,10 +37,10 @@ jobs:
         run: |
           cd android
           gradle wrapper --gradle-version 8.1.1
-          ./gradlew assembleDebug --no-daemon
+          ./gradlew assembleDebug --no-daemon --stacktrace
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: ChatMD-Mobile-APK
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          path: android/app/build/outputs/apk/**/*.apk
