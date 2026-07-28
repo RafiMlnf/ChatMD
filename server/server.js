@@ -411,7 +411,7 @@ function handleMessage(socketId, senderData, data) {
 
   // Filter file berdasarkan ekstensi jika dikirim
   if (fileExt) {
-    const extClean = fileExt.toLowerCase().trim();
+    const extClean = fileExt.toLowerCase().trim().replace(/^\./, "");
     if (!allowedFileTypes[extClean]) {
       serverWarn(`[!] BLOCKED FILE: ${senderData.username} mencoba mengirim file .${extClean} ke ${toUsername} (Dilarang server)`);
       sendTo(senderData.socket, {

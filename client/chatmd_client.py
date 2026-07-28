@@ -124,15 +124,15 @@ def format_message(sender: str, text: str) -> str:
 
 
 def print_status(msg: str):
-    print(f"  [ChatMD] {msg}")
+    print(f"  \033[96m[ChatMD]\033[0m {msg}")
 
 
 def print_error(msg: str):
-    print(f"  [!] {msg}")
+    print(f"  \033[91m[!] {msg}\033[0m")
 
 
 def print_info(msg: str):
-    print(f"  [i] {msg}")
+    print(f"  \033[90m[i] {msg}\033[0m")
 
 
 # ─── Ambil identitas user ───────────────────────────────────────────────────────
@@ -295,7 +295,7 @@ def on_ws_message(ws, raw_msg: str):
             if g_active_partner is None:
                 print_error(f"Server: {err}")
             elif g_current_ui:
-                g_current_ui.print_message("Sistem", f"Server error: {err}")
+                g_current_ui.print_message("Sistem", f"\033[91mServer error: {err}\033[0m")
 
     elif msg_type == "pong":
         pass
@@ -308,7 +308,7 @@ def on_ws_error(ws, error):
             if g_active_partner is None:
                 print_error(f"WebSocket error: {error}")
             elif g_current_ui:
-                g_current_ui.print_message("Sistem", f"WebSocket error: {error}")
+                g_current_ui.print_message("Sistem", f"\033[91mWebSocket error: {error}\033[0m")
 
 
 def on_ws_close(ws, close_status_code, close_msg):
@@ -319,7 +319,7 @@ def on_ws_close(ws, close_status_code, close_msg):
             if g_active_partner is None:
                 print_status("Koneksi ke server terputus.")
             elif g_current_ui:
-                g_current_ui.print_message("Sistem", "Koneksi terputus dari server.")
+                g_current_ui.print_message("Sistem", "\033[91mKoneksi terputus dari server.\033[0m")
 
 
 def _ping_loop(ws: WebSocketApp):
@@ -407,7 +407,7 @@ def _handle_incoming_message(data: dict):
     except ValueError as e:
         with g_sessions_lock:
             if g_active_partner == sender and g_current_ui:
-                g_current_ui.print_message("Sistem", f"Gagal decrypt pesan: {e}")
+                g_current_ui.print_message("Sistem", f"\033[91mGagal decrypt pesan: {e}\033[0m")
         return
 
     with g_sessions_lock:
@@ -429,7 +429,7 @@ def _handle_incoming_message(data: dict):
             g_unread_messages[sender] = g_unread_messages.get(sender, 0) + 1
             # Jika user sedang di dalam chat room dengan orang lain:
             if g_active_partner is not None and g_current_ui:
-                g_current_ui.print_message("Sistem", f"[NOTIF] Pesan baru dari {sender}! Ketik /b untuk membaca.")
+                g_current_ui.print_message("Sistem", f"\033[93m[NOTIF] Pesan baru dari {sender}! Ketik /b untuk membaca.\033[0m")
             # Jika user sedang di menu kontak:
             elif g_active_partner is None:
                 sys.stdout.write("\a")
@@ -460,7 +460,6 @@ def ws_thread_func(server_url: str):
 
 def render_contact_list_only():
     """Renders the contact list menu content strictly without prompting for input."""
-    banner()
     print(f"  Logged in as : {g_username}")
     print(f"  Server       : ws://{g_server_ip}:{CHATMD_PORT}")
     print()
@@ -477,17 +476,19 @@ def render_contact_list_only():
             
             contact_label = f"  [{i}] {user}"
             if unread_count > 0:
-                indicator = f"[{unread_count} Pesan]"
+                raw_indicator = f"[{unread_count} Pesan]"
+                indicator = f"\033[93m{raw_indicator}\033[0m"
                 # Rata kanan sejajar dengan total lebar garis hubung (47 karakter)
                 total_width = 47
-                spaces_count = total_width - len(contact_label) - len(indicator)
+                spaces_count = total_width - len(contact_label) - len(raw_indicator)
                 if spaces_count < 2:
                     spaces_count = 2
                 line = f"{contact_label}{' ' * spaces_count}{indicator}"
             elif has_chat:
-                indicator = "[Pesan]"
+                raw_indicator = "[Pesan]"
+                indicator = f"\033[90m{raw_indicator}\033[0m"
                 total_width = 47
-                spaces_count = total_width - len(contact_label) - len(indicator)
+                spaces_count = total_width - len(contact_label) - len(raw_indicator)
                 if spaces_count < 2:
                     spaces_count = 2
                 line = f"{contact_label}{' ' * spaces_count}{indicator}"
@@ -630,7 +631,7 @@ def run_chat_session(partner: str):
                 break
 
             if not g_ws_connected.is_set():
-                ui.print_message("Sistem", "Tidak terhubung ke server. Pesan gagal terkirim.")
+                ui.print_message("Sistem", "\033[91mTidak terhubung ke server. Pesan gagal terkirim.\033[0m")
                 continue
 
             # Daftar tipe file yang diizinkan (Gambar + Dokumen)
@@ -646,12 +647,12 @@ def run_chat_session(partner: str):
             path_check = text_strip.strip("'\"")
             if os.path.exists(path_check) and os.path.isfile(path_check):
                 _, ext = os.path.splitext(path_check)
-                if ext.lower() in ALLOWED_ALL_EXTS:
+                if ext.lower().strip() in ALLOWED_ALL_EXTS:
                     is_file_cmd = True
                     file_path = path_check
                 else:
                     allowed_str = ", ".join(ALLOWED_ALL_EXTS)
-                    ui.print_message("Sistem", f"File terdeteksi, namun tipe '{ext}' tidak diizinkan. Diizinkan: {allowed_str}")
+                    ui.print_message("Sistem", f"\033[91mFile terdeteksi, namun tipe '{ext}' tidak diizinkan. Diizinkan: {allowed_str}\033[0m")
                     continue
             elif text_strip.lower().startswith(("/i ", "/img ")):
                 is_file_cmd = True
@@ -664,29 +665,37 @@ def run_chat_session(partner: str):
 
             if is_file_cmd:
                 if not file_path:
-                    ui.print_message("Sistem", "Gunakan: /f <path_file> atau /file <path_file>")
+                    ui.print_message("Sistem", "\033[96mGunakan: /f <path_file> atau /file <path_file>\033[0m")
                     continue
 
                 # Bersihkan tanda kutip dari Windows drag-and-drop
                 file_path = file_path.strip("'\"")
 
                 if not os.path.exists(file_path) or not os.path.isfile(file_path):
-                    ui.print_message("Sistem", f"File tidak ditemukan: {file_path}")
+                    ui.print_message("Sistem", f"\033[91mFile tidak ditemukan: {file_path}\033[0m")
+                    continue
+
+                # Cek tipe file (ekstensi)
+                _, ext = os.path.splitext(file_path)
+                ext_clean = ext.lower().strip()
+                if ext_clean not in ALLOWED_ALL_EXTS:
+                    allowed_str = ", ".join(ALLOWED_ALL_EXTS)
+                    ui.print_message("Sistem", f"\033[91mTipe file '{ext}' tidak diizinkan. Diizinkan: {allowed_str}\033[0m")
                     continue
 
                 # Cek ukuran file (maks 10MB)
                 MAX_SIZE = 10 * 1024 * 1024
                 if os.path.getsize(file_path) > MAX_SIZE:
-                    ui.print_message("Sistem", "Ukuran file terlalu besar (maksimal 10MB).")
+                    ui.print_message("Sistem", "\033[91mUkuran file terlalu besar (maksimal 10MB).\033[0m")
                     continue
 
                 try:
                     _, ext = os.path.splitext(file_path)
-                    ext_clean = ext.lower()
+                    ext_clean = ext.lower().strip()
                     is_img = ext_clean in ALLOWED_IMAGE_EXTS
                     label = "GAMBAR" if is_img else "FILE"
 
-                    ui.print_message("Sistem", f"Membaca dan mengirim {label.lower()}...")
+                    ui.print_message("Sistem", f"\033[96mMembaca dan mengirim {label.lower()}...\033[0m")
                     with open(file_path, "rb") as f:
                         file_bytes = f.read()
                     b64_str = base64.b64encode(file_bytes).decode("utf-8")
@@ -695,7 +704,7 @@ def run_chat_session(partner: str):
                     message_payload = f"[IMAGE:{filename}:{b64_str}]"
                     display_text = f"[{label}: {filename}] (Terkirim)"
                 except Exception as e:
-                    ui.print_message("Sistem", f"Gagal membaca file: {e}")
+                    ui.print_message("Sistem", f"\033[91mGagal membaca file: {e}\033[0m")
                     continue
             else:
                 message_payload = text_strip
@@ -716,7 +725,7 @@ def run_chat_session(partner: str):
                 payload = json.dumps(msg_data)
                 g_ws.send(payload)
             except Exception as e:
-                ui.print_message("Sistem", f"Gagal mengirim pesan: {e}")
+                ui.print_message("Sistem", f"\033[91mGagal mengirim pesan: {e}\033[0m")
                 continue
 
             # Simpan ke riwayat pengirim
